@@ -1,4 +1,4 @@
-module github.com/blacktop/go-macho
+module github.com/approov/fork-go-macho
 
 go 1.19
 
