@@ -1422,6 +1422,12 @@ func (f *File) getOffset(address uint64) (uint64, error) {
 	return 0, fmt.Errorf("address %#x not within any segment's adress range", address)
 }
 
+// GetVMA gets the default VM address converter with functions in order to
+// be able to create a new cache reader for export
+func (f *File) GetVMA() *types.VMAddrConverter {
+	return f.vma
+}
+
 // GetVMAddress returns the virtal address for a given file offset
 func (f *File) GetVMAddress(offset uint64) (uint64, error) {
 	return f.vma.GetVMAddress(offset)

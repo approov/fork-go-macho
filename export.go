@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -353,15 +354,35 @@ func (f *File) CodeSign(config *codesign.Config) error {
 	return nil
 }
 
+func (f *File) UpdateCacheReader(newCacheReader types.MachoReader) {
+	f.cr = newCacheReader
+}
+
 func (f *File) Save(outpath string) error {
+	// generate the saved file bytes
+	buf, err := f.SaveBytes()
+	if err != nil {
+		return err
+	}
+
+	// write the modified file
+	os.MkdirAll(filepath.Dir(outpath), os.ModePerm)
+	if err := os.WriteFile(outpath, buf.Bytes(), 0755); err != nil {
+		return fmt.Errorf("failed to save MachO to file %s: %v", outpath, err)
+	}
+	return nil
+}
+
+// Save the bytes an in-memory or cached dylib|kext MachO to a file.
+func (f *File) SaveBytes() (*bytes.Buffer, error) {
 	var buf bytes.Buffer
 
 	if err := f.FileHeader.Write(&buf, f.ByteOrder); err != nil {
-		return fmt.Errorf("failed to write file header to buffer: %v", err)
+		return nil, fmt.Errorf("failed to write file header to buffer: %v", err)
 	}
 
 	if err := f.writeLoadCommands(&buf); err != nil {
-		return fmt.Errorf("failed to write load commands: %v", err)
+		return nil, fmt.Errorf("failed to write load commands: %v", err)
 	}
 
 	endOfLoadsOffset := uint64(buf.Len())
@@ -373,44 +394,47 @@ func (f *File) Save(outpath string) error {
 			case "__TEXT":
 				dat := make([]byte, seg.Filesz)
 				if _, err := f.cr.ReadAtAddr(dat, seg.Addr); err != nil {
-					return fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
+					return nil, fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
 				}
 				if _, err := buf.Write(dat[endOfLoadsOffset:]); err != nil {
-					return fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
+					return nil, fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
 				}
 			case "__LINKEDIT":
 				if f.ledata != nil && f.ledata.Len() > 0 && f.CodeSignature() != nil {
 					if _, err := buf.Write(f.ledata.Bytes()); err != nil {
-						return fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
+						return nil, fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
 					}
 				} else {
 					dat := make([]byte, seg.Filesz)
-					if _, err := f.cr.ReadAtAddr(dat, seg.Addr); err != nil {
-						return fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
+					if bytesRead, err := f.cr.ReadAtAddr(dat, seg.Addr); err != nil {
+						if err == io.EOF {
+							// There seems to be an issue with the LINKEDIT size not being sufficiently long in the file
+							// for the segment file offset and length. Allow a partial read of a LINKEDIT section
+							// to account for this. This maybe a special case for LINKEDIT as it should always be at the end of
+							// the file I believe.
+							newData := make([]byte, bytesRead)
+							copy(newData[:], dat[:bytesRead])
+							dat = newData
+						} else {
+							return nil, fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
+						}
 					}
 					if _, err := buf.Write(dat); err != nil {
-						return fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
+						return nil, fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
 					}
 				}
 			default:
 				dat := make([]byte, seg.Filesz)
 				if _, err := f.cr.ReadAtAddr(dat, seg.Addr); err != nil {
-					return fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
+					return nil, fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
 				}
 				if _, err := buf.Write(dat); err != nil {
-					return fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
+					return nil, fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
 				}
 			}
 		}
 	}
-
-	os.MkdirAll(filepath.Dir(outpath), os.ModePerm)
-
-	if err := os.WriteFile(outpath, buf.Bytes(), 0755); err != nil {
-		return fmt.Errorf("failed to save MachO to file %s: %v", outpath, err)
-	}
-
-	return nil
+	return &buf, nil
 }
 
 func (f *File) optimizeLoadCommands(segMap exportSegMap) error {
