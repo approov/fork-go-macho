@@ -16,6 +16,7 @@ type DyldChainedFixups struct {
 	r             *bytes.Reader
 	sr            types.MachoReader
 	bo            binary.ByteOrder
+	offset        uint64
 }
 
 type Fixup interface {
@@ -89,9 +90,10 @@ const (
 
 type DyldChainedStarts struct {
 	DyldChainedStartsInSegment
-	PageStarts  []DCPtrStart
-	ChainStarts []uint16
-	Fixups      []Fixup
+	SegOffsetFilePos uint64
+	PageStarts       []DCPtrStart
+	ChainStarts      []uint16
+	Fixups           []Fixup
 }
 
 // Rebases filters fixups to only rebases

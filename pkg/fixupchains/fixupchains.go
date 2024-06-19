@@ -7,16 +7,18 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unsafe"
 
 	"github.com/blacktop/go-macho/types"
 )
 
 // NewChainedFixups creates a new DyldChainedFixups instance
-func NewChainedFixups(lcdat *bytes.Reader, sr *types.MachoReader, bo binary.ByteOrder) *DyldChainedFixups {
+func NewChainedFixups(lcdat *bytes.Reader, sr *types.MachoReader, bo binary.ByteOrder, offset uint64) *DyldChainedFixups {
 	return &DyldChainedFixups{
-		r:  lcdat,
-		sr: *sr,
-		bo: bo,
+		r:      lcdat,
+		sr:     *sr,
+		bo:     bo,
+		offset: offset,
 	}
 }
 
@@ -101,6 +103,10 @@ func (dcf *DyldChainedFixups) ParseStarts() error {
 		if err := binary.Read(dcf.r, dcf.bo, &dcf.Starts[segIdx].DyldChainedStartsInSegment); err != nil {
 			return err
 		}
+
+		// remember the location where the segment offset is in the file in case this needs to be modified
+		dcf.Starts[segIdx].SegOffsetFilePos = dcf.offset + uint64(dcf.DyldChainedFixupsHeader.StartsOffset+segInfoOffset) +
+			uint64(unsafe.Offsetof(dcf.Starts[segIdx].DyldChainedStartsInSegment.SegmentOffset))
 
 		dcf.Starts[segIdx].PageStarts = make([]DCPtrStart, dcf.Starts[segIdx].DyldChainedStartsInSegment.PageCount)
 		if err := binary.Read(dcf.r, dcf.bo, &dcf.Starts[segIdx].PageStarts); err != nil {

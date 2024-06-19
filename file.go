@@ -1990,7 +1990,7 @@ func (f *File) DyldChainedFixups() (*fixupchains.DyldChainedFixups, error) {
 			if _, err := f.cr.ReadAt(data, int64(dcfLC.Offset)); err != nil {
 				return nil, fmt.Errorf("failed to read DyldChainedFixups data at offset=%#x; %v", int64(dcfLC.Offset), err)
 			}
-			dcf := fixupchains.NewChainedFixups(bytes.NewReader(data), &f.cr, f.ByteOrder)
+			dcf := fixupchains.NewChainedFixups(bytes.NewReader(data), &f.cr, f.ByteOrder, uint64(dcfLC.Offset))
 			if err := dcf.ParseStarts(); err != nil {
 				return nil, fmt.Errorf("failed to parse dyld chained fixup starts: %v", err)
 			}
