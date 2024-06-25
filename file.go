@@ -146,9 +146,10 @@ func NewFile(r io.ReaderAt, config ...FileConfig) (*File, error) {
 		f.sharedCacheRelativeSelectorBaseVMAddress = config[0].RelativeSelectorBase
 	} else {
 		f.vma = &types.VMAddrConverter{
-			Converter:    f.convertToVMAddr,
-			VMAddr2Offet: f.getOffset,
-			Offet2VMAddr: f.getVMAddress,
+			Converter:        f.convertToVMAddr,
+			ConverterTracked: f.convertToVMAddrTracked,
+			VMAddr2Offet:     f.getOffset,
+			Offet2VMAddr:     f.getVMAddress,
 		}
 		f.sr = types.NewCustomSectionReader(r, f.vma, 0, 1<<63-1)
 		f.cr = f.sr
@@ -1476,24 +1477,24 @@ func (f *File) SlidePointer(ptr uint64) uint64 {
 	return f.vma.Convert(ptr)
 }
 
-func (f *File) convertToVMAddr(value uint64) uint64 {
+func (f *File) convertToVMAddrTracked(value uint64) (uint64, bool) {
 	if value == 0 {
-		return 0
+		return 0, false
 	}
 
 	if f.HasFixups() {
 		if dcf, err := f.DyldChainedFixups(); err == nil {
 			if target, ok := dcf.IsRebase(value, f.GetBaseAddress()); ok {
-				return target + f.preferredLoadAddress()
+				return target + f.preferredLoadAddress(), true
 			} else if bind, addend, ok := dcf.IsBind(value); ok {
 				if bind.Import.LibOrdinal() == types.BIND_SPECIAL_DYLIB_SELF {
 					symAddr, err := f.FindSymbolAddress(bind.Name)
 					if err != nil {
-						return 0
+						return 0, false
 					}
-					return uint64(int64(symAddr) + addend)
+					return uint64(int64(symAddr) + addend), false
 				}
-				return value
+				return value, false
 			}
 		}
 		// TODO: fix this dumb hack for SUPPORT_OLD_ARM64E_FORMAT
@@ -1501,19 +1502,24 @@ func (f *File) convertToVMAddr(value uint64) uint64 {
 			PointerFormat: fixupchains.DYLD_CHAINED_PTR_ARM64E,
 		}
 		if target, ok := dcf.IsRebase(value, f.GetBaseAddress()); ok {
-			return target + f.preferredLoadAddress()
+			return target + f.preferredLoadAddress(), true
 		} else if bind, addend, ok := dcf.IsBind(value); ok {
 			if bind.Import.LibOrdinal() == types.BIND_SPECIAL_DYLIB_SELF {
 				symAddr, err := f.FindSymbolAddress(bind.Name)
 				if err != nil {
-					return 0
+					return 0, false
 				}
-				return uint64(int64(symAddr) + addend)
+				return uint64(int64(symAddr) + addend), false
 			}
 		}
 	}
 
-	return value
+	return value, false
+}
+
+func (f *File) convertToVMAddr(value uint64) uint64 {
+	newValue, _ := f.convertToVMAddrTracked(value)
+	return newValue
 }
 
 // GetBindName returns the import name for a given dyld chained pointer
@@ -1762,9 +1768,10 @@ func (f *File) GetFileSetFileByName(name string) (*File, error) {
 					SectionReader: f.sr,
 					CacheReader:   f.cr,
 					VMAddrConverter: types.VMAddrConverter{
-						Converter:    f.convertToVMAddr,
-						VMAddr2Offet: f.GetOffset,
-						Offet2VMAddr: f.GetVMAddress,
+						Converter:        f.convertToVMAddr,
+						ConverterTracked: f.convertToVMAddrTracked,
+						VMAddr2Offet:     f.GetOffset,
+						Offet2VMAddr:     f.GetVMAddress,
 					},
 				})
 			}

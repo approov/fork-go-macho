@@ -266,7 +266,11 @@ func (f *File) GetObjCClasses() ([]objc.Class, error) {
 
 				for _, ptr := range ptrs {
 					if c, ok := f.GetObjC(f.vma.Convert(ptr)); ok {
-						classes = append(classes, *c.(*objc.Class))
+						class, ok := c.(*objc.Class)
+						if !ok {
+							return nil, fmt.Errorf("failed to cast %T to *objc.Class at 0x%x", c, f.vma.Convert(ptr))
+						}
+						classes = append(classes, *class)
 					} else {
 						class, err := f.GetObjCClass2(f.vma.Convert(ptr))
 						if err != nil {
@@ -859,6 +863,11 @@ func (f *File) parseObjcProtocolList(vmaddr uint64) ([]objc.Protocol, error) {
 		return nil, fmt.Errorf("failed to read protocol_list_t count: %v", err)
 	}
 
+	// TEMP: check if count is too large
+	if protList.Count > 10000 {
+		return nil, fmt.Errorf("protocol_list_t count out of range: %d", protList.Count)
+	}
+
 	protList.Protocols = make([]uint64, protList.Count)
 	if err := binary.Read(f.cr, f.ByteOrder, &protList.Protocols); err != nil {
 		return nil, fmt.Errorf("failed to read protocol_list_t prots: %v", err)
@@ -1018,7 +1027,11 @@ func (f *File) GetObjCProtocols() ([]objc.Protocol, error) {
 
 func (f *File) GetObjCMethods(vmaddr uint64) ([]objc.Method, error) {
 	if c, ok := f.GetObjC(vmaddr); ok {
-		return c.([]objc.Method), nil
+		method, ok := c.([]objc.Method)
+		if !ok {
+			return nil, fmt.Errorf("failed to cast %T to []objc.Method at 0x%x", c, vmaddr)
+		}
+		return method, nil
 	}
 
 	var methods []objc.Method
@@ -1035,19 +1048,19 @@ func (f *File) GetObjCMethods(vmaddr uint64) ([]objc.Method, error) {
 }
 
 // GetObjCMethodLists parses the method lists in the __objc_methlist section
-func (f *File) GetObjCMethodLists() ([]objc.Method, error) {
+func (f *File) GetObjCMethodLists() ([]objc.MethodList, []objc.Method, error) {
 	var methods []objc.Method
-	var methodList objc.MethodList
+	var methodLists []objc.MethodList
 	var nextMethodListOffset uint64
 
 	if sec := f.Section("__TEXT", "__objc_methlist"); sec != nil {
 		if err := f.cr.SeekToAddr(sec.Addr); err != nil {
-			return nil, fmt.Errorf("failed to seek to %s addr %#x: %v", sec.Name, sec.Addr, err)
+			return nil, nil, fmt.Errorf("failed to seek to %s addr %#x: %v", sec.Name, sec.Addr, err)
 		}
 
 		dat := make([]byte, sec.Size)
 		if err := binary.Read(f.cr, f.ByteOrder, dat); err != nil {
-			return nil, fmt.Errorf("failed to read %s.%s data: %v", sec.Seg, sec.Name, err)
+			return nil, nil, fmt.Errorf("failed to read %s.%s data: %v", sec.Seg, sec.Name, err)
 		}
 
 		r := bytes.NewReader(dat)
@@ -1058,14 +1071,16 @@ func (f *File) GetObjCMethodLists() ([]objc.Method, error) {
 			currOffset, _ := r.Seek(0, io.SeekCurrent)
 			currAddr := sec.Addr + uint64(currOffset)
 
+			var methodList objc.MethodList
 			err := binary.Read(r, f.ByteOrder, &methodList)
 			if err == io.EOF {
 				break
 			}
 			if err != nil {
-				return nil, fmt.Errorf("failed to read method_list_t: %v", err)
+				return nil, nil, fmt.Errorf("failed to read method_list_t: %v", err)
 			}
 
+			methodLists = append(methodLists, methodList)
 			mladdrs = append(mladdrs, currAddr)
 			currOffset, _ = r.Seek(0, io.SeekCurrent)
 
@@ -1083,14 +1098,14 @@ func (f *File) GetObjCMethodLists() ([]objc.Method, error) {
 			if err := f.forEachObjCMethod(mladdr, func(u uint64, m objc.Method, b *bool) {
 				methods = append(methods, m)
 			}); err != nil {
-				return nil, fmt.Errorf("failed to read methods for method_list_t at vmaddr %#x: %v", mladdr, err)
+				return nil, nil, fmt.Errorf("failed to read methods for method_list_t at vmaddr %#x: %v", mladdr, err)
 			}
 		}
 	} else {
-		return nil, fmt.Errorf("macho does not contain __objc_methlist section: %w", ErrObjcSectionNotFound)
+		return nil, nil, fmt.Errorf("macho does not contain __objc_methlist section: %w", ErrObjcSectionNotFound)
 	}
 
-	return methods, nil
+	return methodLists, methods, nil
 }
 
 func (f *File) forEachObjCMethod(methodListVMAddr uint64, handler func(uint64, objc.Method, *bool)) error {
@@ -1355,7 +1370,11 @@ func (f *File) GetObjCSuperReferences() (map[uint64]*objc.Class, error) {
 				for idx, ptr := range classPtrs {
 					ptr = f.vma.Convert(ptr)
 					if c, ok := f.objc[ptr]; ok {
-						clsRefs[sec.Addr+uint64(idx*sizeOfInt64)] = c.(*objc.Class)
+						class, ok := c.(*objc.Class)
+						if !ok {
+							return nil, fmt.Errorf("failed to cast %T to *objc.Class at 0x%x", c, ptr)
+						}
+						clsRefs[sec.Addr+uint64(idx*sizeOfInt64)] = class
 					} else {
 						if cls, err := f.GetObjCClass(ptr); err != nil {
 							if f.HasFixups() {

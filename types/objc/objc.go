@@ -24,9 +24,7 @@ type Toc struct {
 
 func (i Toc) String() string {
 	return fmt.Sprintf(
-		"ObjC TOC\n"+
-			"--------\n"+
-			"  __objc_classlist  = %d\n"+
+		"  __objc_classlist  = %d\n"+
 			"  __objc_nlclslist  = %d\n"+
 			"  __objc_catlist    = %d\n"+
 			"  __objc_nlcatlist  = %d\n"+
