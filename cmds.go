@@ -317,7 +317,8 @@ func (v Segments) Swap(i, j int) {
 type Symtab struct {
 	LoadBytes
 	types.SymtabCmd
-	Syms []Symbol
+	Symsize uint32
+	Syms    []Symbol
 }
 
 func (s *Symtab) LoadSize() uint32 {
@@ -350,7 +351,7 @@ func (s *Symtab) String() string {
 	if s.Nsyms == 0 && s.Strsize == 0 {
 		return "Symbols stripped"
 	}
-	return fmt.Sprintf("Symbol offset=0x%08X, Num Syms: %d, String offset=0x%08X-0x%08X", s.Symoff, s.Nsyms, s.Stroff, s.Stroff+s.Strsize)
+	return fmt.Sprintf("Symbol offset=0x%08X-0x%08X, Num Syms: %d, String offset=0x%08X-0x%08X", s.Symoff, s.Symoff+s.Symsize, s.Nsyms, s.Stroff, s.Stroff+s.Strsize)
 }
 func (s *Symtab) MarshalJSON() ([]byte, error) {
 	return json.Marshal(&struct {
@@ -374,11 +375,12 @@ func (s *Symtab) MarshalJSON() ([]byte, error) {
 
 // A Symbol is a Mach-O 32-bit or 64-bit symbol table entry.
 type Symbol struct {
-	Name  string
-	Type  types.NType
-	Sect  uint8
-	Desc  types.NDescType
-	Value uint64
+	Name            string
+	Type            types.NType
+	Sect            uint8
+	Desc            types.NDescType
+	Value           uint64
+	ValueFileOffset int64
 }
 
 func (s Symbol) GetType(m *File) string {

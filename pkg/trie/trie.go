@@ -16,12 +16,14 @@ type Node struct {
 }
 
 type TrieExport struct {
-	Name         string
-	ReExport     string
-	Flags        types.ExportFlag
-	Other        uint64
-	Address      uint64
-	FoundInDylib string
+	Name              string
+	ReExport          string
+	Flags             types.ExportFlag
+	Other             uint64
+	Address           uint64
+	FoundInDylib      string
+	AddressRaw        uint64
+	AddressFileOffset int64
 }
 
 func (e TrieExport) Type() string {
@@ -41,18 +43,20 @@ func (e TrieExport) String() string {
 	return fmt.Sprintf("%#09x:\t(%s)\t%s", e.Address, e.Type(), e.Name)
 }
 
-func ReadUleb128(r *bytes.Reader) (uint64, error) {
+func ReadUleb128WithBytesRead(r *bytes.Reader) (uint64, int64, error) {
 	var result uint64
 	var shift uint64
+	var bytesRead int64
 
 	for {
 		b, err := r.ReadByte()
 		if err == io.EOF {
-			return 0, err
+			return 0, bytesRead, err
 		}
 		if err != nil {
-			return 0, fmt.Errorf("could not parse ULEB128 value: %v", err)
+			return 0, bytesRead, fmt.Errorf("could not parse ULEB128 value: %v", err)
 		}
+		bytesRead++
 
 		result |= uint64((uint(b) & 0x7f) << shift)
 
@@ -64,7 +68,12 @@ func ReadUleb128(r *bytes.Reader) (uint64, error) {
 		shift += 7
 	}
 
-	return result, nil
+	return result, bytesRead, nil
+}
+
+func ReadUleb128(r *bytes.Reader) (uint64, error) {
+	result, _, err := ReadUleb128WithBytesRead(r)
+	return result, err
 }
 
 func ReadSleb128(r *bytes.Reader) (int64, error) {
@@ -165,29 +174,32 @@ func EncodeSleb128(out io.ByteWriter, x int64) {
 	}
 }
 
-func ReadExport(r *bytes.Reader, symbol string, loadAddress uint64) (*TrieExport, error) {
+func ReadExport(r *bytes.Reader, symbol string, fileOffset int64, loadAddress uint64) (*TrieExport, error) {
 	var symFlagInt, symValueInt, symOtherInt uint64
 	var reExportSymBytes []byte
 	var reExportSymName string
 
-	symFlagInt, err := ReadUleb128(r)
+	symFlagInt, bytesRead, err := ReadUleb128WithBytesRead(r)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse ULEB128 symbol flag value: %v", err)
 	}
+	fileOffset += bytesRead
 
 	flags := types.ExportFlag(symFlagInt)
 
 	if flags.ReExport() {
-		symOtherInt, err = ReadUleb128(r)
+		symOtherInt, bytesRead, err = ReadUleb128WithBytesRead(r)
 		if err != nil {
 			return nil, fmt.Errorf("could not parse ULEB128 symbol other reexport value: %v", err)
 		}
+		fileOffset += bytesRead
 
 		for {
 			s, err := r.ReadByte()
 			if err == io.EOF {
 				break
 			}
+			fileOffset++
 			if s == '\x00' {
 				break
 			}
@@ -195,17 +207,19 @@ func ReadExport(r *bytes.Reader, symbol string, loadAddress uint64) (*TrieExport
 		}
 
 	} else if flags.StubAndResolver() {
-		symOtherInt, err = ReadUleb128(r)
+		symOtherInt, bytesRead, err = ReadUleb128WithBytesRead(r)
 		if err != nil {
 			return nil, fmt.Errorf("could not parse ULEB128 symbol other stub-n-resolver value: %v", err)
 		}
 		symOtherInt += loadAddress
+		fileOffset += bytesRead
 	}
 
 	symValueInt, err = ReadUleb128(r)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse ULEB128 symbol value: %v", err)
 	}
+	rawSymValueInt := symValueInt
 
 	if (flags.Regular() || flags.ThreadLocal()) && !flags.ReExport() {
 		symValueInt += loadAddress
@@ -216,15 +230,17 @@ func ReadExport(r *bytes.Reader, symbol string, loadAddress uint64) (*TrieExport
 	}
 
 	return &TrieExport{
-		Name:     symbol,
-		ReExport: reExportSymName,
-		Flags:    flags,
-		Other:    symOtherInt,
-		Address:  symValueInt,
+		Name:              symbol,
+		ReExport:          reExportSymName,
+		Flags:             flags,
+		Other:             symOtherInt,
+		Address:           symValueInt,
+		AddressRaw:        rawSymValueInt,
+		AddressFileOffset: fileOffset,
 	}, nil
 }
 
-func ParseTrieExports(r *bytes.Reader, loadAddress uint64) ([]TrieExport, error) {
+func ParseTrieExports(r *bytes.Reader, fileOffset int64, loadAddress uint64) ([]TrieExport, error) {
 	var exports []TrieExport
 
 	nodes, err := ParseTrie(r)
@@ -236,7 +252,7 @@ func ParseTrieExports(r *bytes.Reader, loadAddress uint64) ([]TrieExport, error)
 		if _, err := r.Seek(int64(node.Offset), io.SeekStart); err != nil {
 			return nil, fmt.Errorf("could not seek to trie node: %v", err)
 		}
-		export, err := ReadExport(r, string(node.Data), loadAddress)
+		export, err := ReadExport(r, string(node.Data), fileOffset+int64(node.Offset), loadAddress)
 		if err != nil {
 			return nil, fmt.Errorf("could not read trie export metadata: %v", err)
 		}

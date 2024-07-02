@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/blacktop/go-dwarf"
 
@@ -32,14 +33,15 @@ type File struct {
 	Symtab   *Symtab
 	Dysymtab *Dysymtab
 
-	vma         *types.VMAddrConverter
-	dcf         *fixupchains.DyldChainedFixups
-	exp         []trie.TrieExport
-	exptrieData []byte
-	binds       types.Binds
-	objc        map[uint64]any
-	swift       map[uint64]any
-	ledata      *bytes.Buffer // tmp storage of linkedit data
+	vma               *types.VMAddrConverter
+	dcf               *fixupchains.DyldChainedFixups
+	exp               []trie.TrieExport
+	exptrieData       []byte
+	exptrieFileOffset int64
+	binds             types.Binds
+	objc              map[uint64]any
+	swift             map[uint64]any
+	ledata            *bytes.Buffer // tmp storage of linkedit data
 
 	sharedCacheRelativeSelectorBaseVMAddress uint64 // objc_opt version 16
 
@@ -321,7 +323,7 @@ func NewFile(r io.ReaderAt, config ...FileConfig) (*File, error) {
 			if _, err := f.cr.ReadAt(strtab, int64(hdr.Stroff)); err != nil {
 				return nil, fmt.Errorf("failed to read data at Stroff=%#x; %v", int64(hdr.Stroff), err)
 			}
-			st, err := f.parseSymtab(symdat, strtab, cmddat, &hdr, offset)
+			st, err := f.parseSymtab(symdat, strtab, cmddat, &hdr, offset, int64(hdr.Symoff))
 			if err != nil {
 				return nil, fmt.Errorf("failed to read parseSymtab: %v", err)
 			}
@@ -1239,16 +1241,21 @@ func NewFile(r io.ReaderAt, config ...FileConfig) (*File, error) {
 	return f, nil
 }
 
-func (f *File) parseSymtab(symdat, strtab, cmddat []byte, hdr *types.SymtabCmd, offset int64) (*Symtab, error) {
+func (f *File) parseSymtab(symdat, strtab, cmddat []byte, hdr *types.SymtabCmd, cmdOffset int64, symsOffset int64) (*Symtab, error) {
+	var symSize uint32
 	bo := f.ByteOrder
 	symtab := make([]Symbol, hdr.Nsyms)
 	b := bytes.NewReader(symdat)
 	for i := range symtab {
+		var valueFileOffset int64
 		var n types.Nlist64
 		if f.Magic == types.Magic64 {
 			if err := binary.Read(b, bo, &n); err != nil {
 				return nil, fmt.Errorf("failed to read Symtab magic: %v", err)
 			}
+			valueFileOffset = symsOffset + int64(unsafe.Offsetof(n.Value))
+			symsOffset += int64(unsafe.Sizeof(n))
+			symSize += uint32(unsafe.Sizeof(n))
 		} else {
 			var n32 types.Nlist32
 			if err := binary.Read(b, bo, &n32); err != nil {
@@ -1259,10 +1266,13 @@ func (f *File) parseSymtab(symdat, strtab, cmddat []byte, hdr *types.SymtabCmd, 
 			n.Sect = n32.Sect
 			n.Desc = n32.Desc
 			n.Value = uint64(n32.Value)
+			valueFileOffset = symsOffset + int64(unsafe.Offsetof(n32.Value))
+			symsOffset += int64(unsafe.Sizeof(n32))
+			symSize += uint32(unsafe.Sizeof(n32))
 		}
 		sym := &symtab[i]
 		if n.Name >= uint32(len(strtab)) {
-			return nil, &FormatError{offset, "invalid name in symbol table", n.Name}
+			return nil, &FormatError{cmdOffset, "invalid name in symbol table", n.Name}
 		}
 		// We add "_" to Go symbols. Strip it here. See issue 33808.
 		name := cstring(strtab[n.Name:])
@@ -1274,10 +1284,12 @@ func (f *File) parseSymtab(symdat, strtab, cmddat []byte, hdr *types.SymtabCmd, 
 		sym.Sect = n.Sect
 		sym.Desc = n.Desc
 		sym.Value = n.Value
+		sym.ValueFileOffset = valueFileOffset
 	}
 	st := new(Symtab)
 	st.LoadBytes = LoadBytes(cmddat)
 	st.Symoff = hdr.Symoff
+	st.Symsize = symSize
 	st.Nsyms = hdr.Nsyms
 	st.Stroff = hdr.Stroff
 	st.Strsize = hdr.Strsize
@@ -1926,6 +1938,7 @@ func (f *File) GetDyldExport(symbol string) (*trie.TrieExport, error) {
 			r = bytes.NewReader(f.exptrieData)
 		} else {
 			f.exptrieData = make([]byte, dxt.Size)
+			f.exptrieFileOffset = int64(dxt.Offset)
 			if _, err := f.cr.ReadAt(f.exptrieData, int64(dxt.Offset)); err != nil {
 				f.exptrieData = nil
 				return nil, fmt.Errorf("failed to read %s data at offset=%#x; %v", types.LC_DYLD_EXPORTS_TRIE, int64(dxt.Offset), err)
@@ -1935,7 +1948,7 @@ func (f *File) GetDyldExport(symbol string) (*trie.TrieExport, error) {
 		if _, err = trie.WalkTrie(r, symbol); err != nil {
 			return nil, err
 		}
-		return trie.ReadExport(r, symbol, f.preferredLoadAddress())
+		return trie.ReadExport(r, symbol, f.exptrieFileOffset, f.preferredLoadAddress())
 	}
 }
 
@@ -1953,7 +1966,7 @@ func (f *File) DyldExports() ([]trie.TrieExport, error) {
 		if _, err := f.cr.ReadAt(data, int64(dxt.Offset)); err != nil {
 			return nil, fmt.Errorf("failed to read %s data at offset=%#x; %v", types.LC_DYLD_EXPORTS_TRIE, int64(dxt.Offset), err)
 		}
-		f.exp, err = trie.ParseTrieExports(bytes.NewReader(data), f.GetBaseAddress())
+		f.exp, err = trie.ParseTrieExports(bytes.NewReader(data), int64(dxt.Offset), f.GetBaseAddress())
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse %s: %v", types.LC_DYLD_EXPORTS_TRIE, err)
 		}
@@ -2402,7 +2415,7 @@ func (f *File) GetExports() ([]trie.TrieExport, error) {
 			if _, err := f.cr.ReadAt(dat, int64(dinfo.ExportOff)); err != nil {
 				return nil, fmt.Errorf("failed to read bind info: %v", err)
 			}
-			return trie.ParseTrieExports(bytes.NewReader(dat), f.GetBaseAddress())
+			return trie.ParseTrieExports(bytes.NewReader(dat), int64(dinfo.ExportOff), f.GetBaseAddress())
 		}
 	} else if dinfo := f.DyldInfoOnly(); dinfo != nil {
 		if dinfo.ExportSize > 0 {
@@ -2411,7 +2424,7 @@ func (f *File) GetExports() ([]trie.TrieExport, error) {
 			if _, err := f.cr.ReadAt(dat, int64(dinfo.ExportOff)); err != nil {
 				return nil, fmt.Errorf("failed to read bind info: %v", err)
 			}
-			return trie.ParseTrieExports(bytes.NewReader(dat), f.GetBaseAddress())
+			return trie.ParseTrieExports(bytes.NewReader(dat), int64(dinfo.ExportOff), f.GetBaseAddress())
 		}
 	} else {
 		return nil, ErrMachODyldInfoNotFound
