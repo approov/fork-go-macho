@@ -317,11 +317,11 @@ func NewFile(r io.ReaderAt, config ...FileConfig) (*File, error) {
 			}
 			symdat := make([]byte, int(hdr.Nsyms)*f.symbolSize())
 			if _, err := f.cr.ReadAt(symdat, int64(hdr.Symoff)); err != nil {
-				return nil, fmt.Errorf("failed to read data at Symoff=%#x; %v", int64(hdr.Symoff), err)
+				return nil, fmt.Errorf("failed to read data at Symoff=%#x, size=%#x; %v", int64(hdr.Symoff), len(symdat), err)
 			}
 			strtab := make([]byte, hdr.Strsize)
 			if _, err := f.cr.ReadAt(strtab, int64(hdr.Stroff)); err != nil {
-				return nil, fmt.Errorf("failed to read data at Stroff=%#x; %v", int64(hdr.Stroff), err)
+				return nil, fmt.Errorf("failed to read data at Stroff=%#x, size=%#x; %v", int64(hdr.Stroff), len(strtab), err)
 			}
 			st, err := f.parseSymtab(symdat, strtab, cmddat, &hdr, offset, int64(hdr.Symoff))
 			if err != nil {

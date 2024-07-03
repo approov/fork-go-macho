@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -388,10 +387,14 @@ func (f *File) SaveBytes() (*bytes.Buffer, error) {
 	endOfLoadsOffset := uint64(buf.Len())
 
 	// Write out segment data to buffer
+	var offset uint64
 	for _, seg := range f.Segments() {
 		if seg.Filesz > 0 {
 			switch seg.Name {
 			case "__TEXT":
+				if (offset != 0) || (seg.Offset != 0) {
+					return nil, fmt.Errorf("unexpected non-zero file offset for __TEXT")
+				}
 				dat := make([]byte, seg.Filesz)
 				if _, err := f.cr.ReadAtAddr(dat, seg.Addr); err != nil {
 					return nil, fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
@@ -400,30 +403,46 @@ func (f *File) SaveBytes() (*bytes.Buffer, error) {
 					return nil, fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
 				}
 			case "__LINKEDIT":
+				if offset != seg.Offset {
+					// in some cases there may be a file offset gap between the last segment and the __LINKEDIT segment that
+					// we need to pad with zeros
+					if seg.Offset < offset {
+						return nil, fmt.Errorf("segment __LINKEDIT file offset too low to export buffer")
+					}
+					dat := make([]byte, seg.Offset-offset)
+					if _, err := buf.Write(dat); err != nil {
+						return nil, fmt.Errorf("failed to write pre-padding for __LINKEDIT: %v", err)
+					}
+				}
 				if f.ledata != nil && f.ledata.Len() > 0 && f.CodeSignature() != nil {
 					if _, err := buf.Write(f.ledata.Bytes()); err != nil {
 						return nil, fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
 					}
 				} else {
 					dat := make([]byte, seg.Filesz)
-					if bytesRead, err := f.cr.ReadAtAddr(dat, seg.Addr); err != nil {
-						if err == io.EOF {
+					if _, err := f.cr.ReadAtAddr(dat, seg.Addr); err != nil {
+						return nil, fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
+						// TODO: delete this for now (assign bytesRead in call above)
+						/*if err == io.EOF {
 							// There seems to be an issue with the LINKEDIT size not being sufficiently long in the file
 							// for the segment file offset and length. Allow a partial read of a LINKEDIT section
-							// to account for this. This maybe a special case for LINKEDIT as it should always be at the end of
+							// to account for this. This may be a special case for LINKEDIT as it should always be at the end of
 							// the file I believe.
 							newData := make([]byte, bytesRead)
 							copy(newData[:], dat[:bytesRead])
 							dat = newData
 						} else {
 							return nil, fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
-						}
+						}*/
 					}
 					if _, err := buf.Write(dat); err != nil {
 						return nil, fmt.Errorf("failed to write segment %s to export buffer: %v", seg.Name, err)
 					}
 				}
 			default:
+				if offset != seg.Offset {
+					return nil, fmt.Errorf("mismatch in file offset for %s to export buffer", seg.Name)
+				}
 				dat := make([]byte, seg.Filesz)
 				if _, err := f.cr.ReadAtAddr(dat, seg.Addr); err != nil {
 					return nil, fmt.Errorf("failed to read segment %s data: %v", seg.Name, err)
@@ -433,6 +452,7 @@ func (f *File) SaveBytes() (*bytes.Buffer, error) {
 				}
 			}
 		}
+		offset += seg.Filesz
 	}
 	return &buf, nil
 }
