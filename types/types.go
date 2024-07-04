@@ -357,31 +357,13 @@ type FilePointer struct {
 
 type VMAddrConverter struct {
 	PreferredLoadAddress            uint64
-	TrackedRebases                  []uint64
 	Slide                           int64
 	ChainedPointerFormat            uint16
 	IsContentRebased                bool
 	SharedCacheChainedPointerFormat uint8
 	Converter                       func(uint64) uint64
-	ConverterTracked                func(uint64) (uint64, bool)
 	VMAddr2Offet                    func(uint64) (uint64, error)
 	Offet2VMAddr                    func(uint64) (uint64, error)
-}
-
-func (v *VMAddrConverter) ClearTrackedRebases() {
-	v.TrackedRebases = make([]uint64, 0)
-}
-
-func (v *VMAddrConverter) GetTrackedRebases() []uint64 {
-	return v.TrackedRebases
-}
-
-func (v *VMAddrConverter) ConvertTracked(addr uint64, fileOffset uint64) uint64 {
-	newAddr, isTracked := v.ConverterTracked(addr)
-	if isTracked && (v.TrackedRebases != nil) {
-		v.TrackedRebases = append(v.TrackedRebases, fileOffset)
-	}
-	return newAddr
 }
 
 func (v *VMAddrConverter) Convert(addr uint64) uint64 {
