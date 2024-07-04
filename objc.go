@@ -1132,12 +1132,14 @@ func (f *File) forEachObjCMethod(methodListVMAddr uint64, handler func(uint64, o
 
 			method := objc.Method{}
 
+			addrType := "rel"
 			if methodList.UsesDirectOffsetsToSelectors() {
 				if f.sharedCacheRelativeSelectorBaseVMAddress != 0 {
 					method.NameVMAddr = uint64(int64(f.sharedCacheRelativeSelectorBaseVMAddress) + int64(m.NameOffset))
 				} else {
 					method.NameVMAddr = uint64(methodVMAddr + int64(m.NameOffset))
 				}
+				addrType = "rel-dirsel"
 			} else {
 				nameVMAddr := uint64(methodVMAddr + int64(m.NameOffset))
 				method.NameVMAddr, err = f.GetPointerAtAddress(nameVMAddr)
@@ -1149,6 +1151,7 @@ func (f *File) forEachObjCMethod(methodListVMAddr uint64, handler func(uint64, o
 			method.NameLocationVMAddr = uint64(methodVMAddr+int64(m.NameOffset)) + uint64(unsafe.Offsetof(m.NameOffset))
 			method.TypesVMAddr = uint64(methodVMAddr+int64(m.TypesOffset)) + uint64(unsafe.Offsetof(m.TypesOffset))
 			method.ImpVMAddr = uint64(methodVMAddr+int64(m.ImpOffset)) + uint64(unsafe.Offsetof(m.ImpOffset))
+			method.AddrType = addrType
 
 			method.Name, err = f.GetCString(method.NameVMAddr)
 			if err != nil {
@@ -1188,6 +1191,7 @@ func (f *File) forEachObjCMethod(methodListVMAddr uint64, handler func(uint64, o
 				NameVMAddr:  m.NameVMAddr,
 				TypesVMAddr: m.TypesVMAddr,
 				ImpVMAddr:   m.ImpVMAddr,
+				AddrType:    "abs",
 				Name:        n,
 				Types:       t,
 			}, &stop)

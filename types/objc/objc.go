@@ -332,6 +332,7 @@ type Method struct {
 
 	// We also need to know where the reference to the nameVMAddr was
 	// This is so that we know how to rebind that location
+	AddrType           string
 	NameLocationVMAddr uint64
 	Name               string
 	Types              string

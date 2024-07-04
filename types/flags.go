@@ -34,9 +34,9 @@ type Rebase struct {
 
 func (r Rebase) String() string {
 	return fmt.Sprintf(
-		"%-24s\t(%#x+%#x)\ttype=%s value=%#x",
+		"%-24s\t(%#x+%#x=%#x)\ttype=%s value=%#x",
 		r.Segment+"."+r.Section,
-		r.Start, r.Offset,
+		r.Start, r.Offset, r.Start+r.Offset,
 		getBindType(r.Type),
 		r.Value,
 	)

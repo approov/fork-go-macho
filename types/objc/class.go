@@ -215,7 +215,7 @@ func (c *Class) dump(verbose, addrs bool) string {
 			if verbose {
 				rtype, args := decodeMethodTypes(meth.Types)
 				if addrs {
-					s.WriteString(fmt.Sprintf("// %#x\n", meth.ImpVMAddr))
+					s.WriteString(fmt.Sprintf("// %#x (%s)\n", meth.ImpVMAddr, meth.AddrType))
 				}
 				s.WriteString(fmt.Sprintf("+ %s\n", getMethodWithArgs(meth.Name, rtype, args)))
 			} else {
@@ -239,7 +239,7 @@ func (c *Class) dump(verbose, addrs bool) string {
 			if verbose {
 				rtype, args := decodeMethodTypes(meth.Types)
 				if addrs {
-					s.WriteString(fmt.Sprintf("// %#x\n", meth.ImpVMAddr))
+					s.WriteString(fmt.Sprintf("// %#x (%s)\n", meth.ImpVMAddr, meth.AddrType))
 				}
 				s.WriteString(fmt.Sprintf("- %s\n", getMethodWithArgs(meth.Name, rtype, args)))
 			} else {
