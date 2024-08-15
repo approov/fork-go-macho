@@ -1187,13 +1187,15 @@ func (f *File) forEachObjCMethod(methodListVMAddr uint64, handler func(uint64, o
 				return fmt.Errorf("failed to read method_t types cstring: %v", err)
 			}
 			stop := false
-			handler(uint64(currentVMAddr+int64(idx*binary.Size(m))), objc.Method{
-				NameVMAddr:  m.NameVMAddr,
-				TypesVMAddr: m.TypesVMAddr,
-				ImpVMAddr:   m.ImpVMAddr,
-				AddrType:    "abs",
-				Name:        n,
-				Types:       t,
+			fileAddr := uint64(currentVMAddr + int64(idx*binary.Size(m)))
+			handler(fileAddr, objc.Method{
+				NameVMAddr:         m.NameVMAddr,
+				TypesVMAddr:        m.TypesVMAddr,
+				ImpVMAddr:          m.ImpVMAddr,
+				AddrType:           "abs",
+				NameLocationVMAddr: fileAddr + uint64(unsafe.Offsetof(m.NameVMAddr)),
+				Name:               n,
+				Types:              t,
 			}, &stop)
 			if stop { // handler requested to halt iteration
 				break
